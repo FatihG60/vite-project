@@ -1,6 +1,8 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain, session } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import mime from 'mime-types'; // MIME tipi doğrulaması için eklendi
+import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -24,11 +26,24 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 
 let win: BrowserWindow | null
 
+let mainWindow: BrowserWindow;
+
+// Desteklenen MIME türleri
+const supportedMimeTypes = [
+  'application/zip',
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'text/plain'
+];
+
 function createWindow() {
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
+      contextIsolation: true,
+      nodeIntegration: false
     },
   })
 
@@ -43,6 +58,62 @@ function createWindow() {
     // win.loadFile('dist/index.html')
     win.loadFile(path.join(RENDERER_DIST, 'index.html'))
   }
+
+  ipcMain.handle('download-file', async (event, url) => {
+    const mimeType = mime.lookup(url);
+    if (!supportedMimeTypes.includes(mimeType || "")) {
+      mainWindow.webContents.send('download-error', 'Bu dosya türü indirilemez.');
+      return;
+    }
+
+    const downloadSession = session.defaultSession;
+    const downloadId = uuidv4();
+
+    downloadSession.on('will-download', (event, item) => {
+      const savePath = path.join(app.getPath('downloads'), item.getFilename());
+      item.setSavePath(savePath);
+
+      // İlerleme bilgilerini her indirme için `downloadId` ile gönderiyoruz
+      item.on('updated', () => {
+        mainWindow.webContents.send('download-progress', {
+          downloadId,
+          receivedBytes: item.getReceivedBytes(),
+          totalBytes: item.getTotalBytes()
+        });
+      });
+
+      // Duraklat, devam ettir ve iptal işlemleri için `downloadId` kullanarak işleyiciler
+      ipcMain.on(`pause-download-${downloadId}`, () => {
+        if (!item.isPaused()) {
+          item.pause();
+          mainWindow.webContents.send('download-status', { downloadId, message: 'İndirme duraklatıldı.' });
+        }
+      });
+
+      ipcMain.on(`resume-download-${downloadId}`, () => {
+        if (item.isPaused()) {
+          item.resume();
+          mainWindow.webContents.send('download-status', { downloadId, message: 'İndirme devam ediyor.' });
+        }
+      });
+
+      ipcMain.on(`cancel-download-${downloadId}`, () => {
+        item.cancel();
+        mainWindow.webContents.send('download-status', { downloadId, message: 'İndirme iptal edildi.' });
+      });
+
+      item.once('done', (event, state) => {
+        if (state === 'completed') {
+          mainWindow.webContents.send('download-complete', { downloadId, savePath });
+        } else {
+          mainWindow.webContents.send('download-cancelled', downloadId);
+        }
+      });
+    });
+
+    mainWindow.webContents.downloadURL(url);
+    mainWindow.webContents.send('download-start', downloadId);
+  });
 }
 
 // Quit when all windows are closed, except on macOS. There, it's common

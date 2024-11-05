@@ -1,118 +1,116 @@
-import { Button } from "primereact/button";
-import { Card } from "primereact/card";
-import { Column } from "primereact/column";
-import { DataTable } from "primereact/datatable";
-import { InputTextarea } from "primereact/inputtextarea";
-import { useEffect, useState } from "react";
+// App.tsx
+import React, { useState, useRef } from 'react';
+import { Button } from 'primereact/button';
+import { ProgressBar } from 'primereact/progressbar';
+import { Toast } from 'primereact/toast';
 
-interface Customer {
-  id: number;
-  name: string;
-  email: string;
-  country: string;
-  status: string;
+const { ipcRenderer } = window as any;
+
+interface Download {
+  progress: number;
+  isPaused: boolean;
 }
 
-export const Download = () => {
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(
-    null
-  );
+const Download: React.FC = () => {
+  const [downloads, setDownloads] = useState<Record<string, Download>>({});
+  const toast = useRef<Toast>(null);
 
-  useEffect(() => {
-    const mockCustomers: Customer[] = [
-      {
-        id: 1,
-        name: "John Doe",
-        email: "john@example.com",
-        country: "USA",
-        status: "Active",
-      },
-      {
-        id: 2,
-        name: "Jane Roe",
-        email: "jane@example.com",
-        country: "UK",
-        status: "Inactive",
-      },
-      {
-        id: 3,
-        name: "Max Mustermann",
-        email: "max@example.com",
-        country: "Germany",
-        status: "Active",
-      },
-      {
-        id: 4,
-        name: "Maria Garcia",
-        email: "maria@example.com",
-        country: "Spain",
-        status: "Pending",
-      },
-    ];
+  const downloadFile = (url: string) => {
+    ipcRenderer.invoke('download-file', url);
+  };
 
-    setCustomers(mockCustomers);
-  }, []);
+  ipcRenderer.on('download-start', (event, downloadId: string) => {
+    setDownloads((prevDownloads) => ({
+      ...prevDownloads,
+      [downloadId]: { progress: 0, isPaused: false }
+    }));
+  });
 
-  // Durum hücresi için dinamik sınıf ekleyen template
-  const statusBodyTemplate = (rowData: Customer) => {
-    return (
-      <span className={`customer-badge status-${rowData.status.toLowerCase()}`}>
-        {rowData.status}
-      </span>
-    );
+  ipcRenderer.on('download-progress', (event, { downloadId, receivedBytes, totalBytes }: { downloadId: string, receivedBytes: number}) => {
+    const percent = Math.round((receivedBytes / totalBytes) * 100);
+    setDownloads((prevDownloads) => ({
+      ...prevDownloads,
+      [downloadId]: { ...prevDownloads[downloadId], progress: percent }
+    }));
+  });
+
+  ipcRenderer.on('download-complete', (event, { downloadId, savePath }) => {
+    toast.current?.show({ severity: 'success', summary: 'İndirme Tamamlandı', detail: `Dosya: ${savePath}` });
+    setDownloads((prevDownloads) => {
+      const updatedDownloads = { ...prevDownloads };
+      delete updatedDownloads[downloadId];
+      return updatedDownloads;
+    });
+  });
+
+  ipcRenderer.on('download-cancelled', (event, downloadId: string) => {
+    toast.current?.show({ severity: 'warn', summary: 'İndirme İptal Edildi' });
+    setDownloads((prevDownloads) => {
+      const updatedDownloads = { ...prevDownloads };
+      delete updatedDownloads[downloadId];
+      return updatedDownloads;
+    });
+  });
+
+  ipcRenderer.on('download-error', (event, message: string) => {
+    toast.current?.show({ severity: 'error', summary: 'İndirme Hatası', detail: message });
+  });
+
+  ipcRenderer.on('download-status', (event, { downloadId, message }) => {
+    toast.current?.show({ severity: 'info', summary: message });
+  });
+
+  const handlePause = (downloadId: string) => {
+    ipcRenderer.send(`pause-download-${downloadId}`);
+    setDownloads((prevDownloads) => ({
+      ...prevDownloads,
+      [downloadId]: { ...prevDownloads[downloadId], isPaused: true }
+    }));
+  };
+
+  const handleResume = (downloadId: string) => {
+    ipcRenderer.send(`resume-download-${downloadId}`);
+    setDownloads((prevDownloads) => ({
+      ...prevDownloads,
+      [downloadId]: { ...prevDownloads[downloadId], isPaused: false }
+    }));
+  };
+
+  const handleCancel = (downloadId: string) => {
+    ipcRenderer.send(`cancel-download-${downloadId}`);
   };
 
   return (
-    <Card className="flex flex-column ">
-      <DataTable
-        value={customers}
-        selection={selectedCustomer}
-        onSelectionChange={(e) => setSelectedCustomer(e.value as Customer)}
-        dataKey="id"
-      >
-        <Column
-          selectionMode="multiple"
-          headerStyle={{ width: "3em" }}
-        ></Column>{" "}
-        <Column
-          field="id"
-          header="ID"
-          sortable
-          style={{ width: "5%" }}
-        ></Column>
-        <Column
-          field="name"
-          header="Name"
-          sortable
-          style={{ width: "25%" }}
-        ></Column>
-        <Column
-          field="email"
-          header="Email"
-          sortable
-          style={{ width: "25%" }}
-        ></Column>
-        <Column
-          field="country"
-          header="Country"
-          sortable
-          style={{ width: "20%" }}
-        ></Column>
-        <Column
-          field="status"
-          header="Status"
-          body={statusBodyTemplate}
-          sortable
-          style={{ width: "10%" }}
-        ></Column>
-      </DataTable>
-      <InputTextarea
-        className="h-10rem w-full my-4"
-        autoResize
-        placeholder="Açıklama"
+    <div className="App">
+      <Toast ref={toast} />
+      <h2>Dosya İndirici</h2>
+      <Button
+        label="İndir"
+        icon="pi pi-download"
+        onClick={() => downloadFile('https://example.com/file.zip')}
       />
-      <Button className="w-full" label="Taşıma" severity="success" outlined />
-    </Card>
+      <div style={{ marginTop: '20px' }}>
+        {Object.keys(downloads).map((downloadId) => (
+          <div key={downloadId} className="download-item">
+            <ProgressBar value={downloads[downloadId].progress} />
+            <div className="button-group">
+              <Button
+                label={downloads[downloadId].isPaused ? 'Devam Ettir' : 'Duraklat'}
+                icon={`pi ${downloads[downloadId].isPaused ? 'pi-play' : 'pi-pause'}`}
+                onClick={() => downloads[downloadId].isPaused ? handleResume(downloadId) : handlePause(downloadId)}
+              />
+              <Button
+                label="İptal Et"
+                icon="pi pi-times"
+                onClick={() => handleCancel(downloadId)}
+                className="p-button-danger"
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
-};
+}
+
+export default Download;
