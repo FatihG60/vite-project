@@ -2,7 +2,8 @@ import { Card } from "primereact/card";
 import { TabMenu } from "primereact/tabmenu";
 import { useState } from "react";
 import { Upload } from "../components/Upload";
-import { Download } from "../components/Download";
+import Download from "../components/Download";
+
 
 function MainTab() {
   const [activeIndex, setActiveIndex] = useState(0);
